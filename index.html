@@ -25,7 +25,7 @@
   const cv = document.getElementById("c");
   const ctx = cv.getContext("2d", { alpha: false });
 
-  
+  /* ---------- utilidades ---------- */
   const RAMP = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
   const NR = RAMP.length - 1;
   const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
@@ -40,7 +40,7 @@
   }
   const fbm = (x, y) => .5 * vnoise(x, y) + .25 * vnoise(x * 2.1, y * 2.1) + .125 * vnoise(x * 4.3, y * 4.3);
 
- 
+  /* ---------- paleta ---------- */
   const SKIN  = [.62, .40, .29];
   const SKIN2 = [.74, .34, .30];
   const LASH  = [.10, .06, .04];
@@ -49,15 +49,16 @@
   const IROUT = [.32, .19, .09];
   const PINK  = [.62, .36, .95];
 
+  /* ---------- línea de tiempo ---------- */
   const T_Z0 = 6.4, T_ZD = 6.2, T_FADE = 15.2, LOOP = 16.8;
   const S0 = .82, S1 = 16;          // zoom inicial / final
   const CX = 0, CY = .04;           // centro de la pupila (en mundo)
 
- 
+  /* salida del "shader" */
   let oR = 0, oG = 0, oB = 0, oGlyph = -1, oBoost = 0;
-  let PCX = 0, PCY = .04, OPEN = 1;  
+  let PCX = 0, PCY = .04, OPEN = 1;   // centro de la pupila (mirada) y apertura del párpado
 
- 
+  // mirada: sacadas rápidas (con leve rebote) + microtemblor en las fijaciones
   const SACC = [[2.0,.30,.03],[3.8,-.32,-.02],[5.5,0,0]];
   const SDUR = .11;
   function gazeAt(t) {
@@ -66,7 +67,7 @@
       if (t >= s[0]) { px = gx = s[1]; py = gy = s[2]; continue; }
       break;
     }
-
+    // sacada en curso
     for (let i = 0; i < SACC.length; i++) {
       const s = SACC[i];
       if (t >= s[0] && t < s[0] + SDUR) {
@@ -76,12 +77,12 @@
         gx = mix(fx, s[1], e); gy = mix(fy, s[2], e);
       }
     }
-   
+    // deriva lenta natural
     gx += (vnoise(t * 1.1, 4.2) - .5) * .014;
     gy += (vnoise(t * .9, 9.7) - .5) * .010;
     return [gx, gy];
   }
- 
+  // parpadeos: cierran rápido, abren más lento
   const BLINKS = [3.0, 3.78, 5.48];
   function openAt(t) {
     let o = sstep(.5, 1.7, t);
@@ -92,9 +93,9 @@
     return o;
   }
 
- 
+  /* ---------- estrellas dentro de la pupila ---------- */
   function stars(ux, uy, m, cellU, cellUx, t) {
-  
+    // 3 capas que se acercan al hacer zoom (zoom infinito)
     let best = 0, glyph = -1;
     for (let k = 0; k < 3; k++) {
       const ph = ((m * .5 + k / 3) % 1 + 1) % 1;
@@ -121,6 +122,7 @@
   }
   const STAR_GLYPHS = ["+", "|", "*", "."];
 
+  /* ---------- corazón lila (cristal con brillo y latido) ---------- */
   let curT = 0;
   function hf(x, y) { const q = x * x + y * y - 1; return q * q * q - x * x * y * y * y; }
   function planet(ux, uy, R) {
@@ -136,7 +138,7 @@
       const gx = (H(x + e, y) - H(x - e, y)) / (2 * e), gy = (H(x, y + e) - H(x, y - e)) / (2 * e);
       const inv = 1 / Math.sqrt(gx * gx + gy * gy + 1);
       const nx = -gx * inv, ny = -gy * inv, nz = inv;
-   
+      // luz principal (arriba izquierda) + rebote magenta (abajo derecha)
       const dif = clamp(nx * -.5 + ny * .55 + nz * .67);
       const bounce = clamp(nx * .6 + ny * -.6 + nz * .3);
       const hx = -.25 + .5 * nx, hy = .3 + .5 * ny, hz = .85 + .5 * nz;
