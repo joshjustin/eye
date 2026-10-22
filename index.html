@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050508">
+<title>My gaze</title>
+<style>
+  html,body{margin:0;height:100%;background:#050508;overflow:hidden;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+  #win{position:fixed;inset:0;display:flex;flex-direction:column}
+  #stage{flex:1;position:relative;min-height:0;background:#050508}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+</style>
+</head>
+<body>
+<div id="win">
+  <div id="stage">
+    <canvas id="c"></canvas>
+  </div>
+</div>
+<script>
+(() => {
+  "use strict";
+  const cv = document.getElementById("c");
+  const ctx = cv.getContext("2d", { alpha: false });
+
+  /* ---------- utilidades ---------- */
+  const RAMP = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+  const NR = RAMP.length - 1;
+  const clamp = (x, a = 0, b = 1) => x < a ? a : x > b ? b : x;
+  const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+  const mix = (a, b, t) => a + (b - a) * t;
+  function hash(x, y) { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
+  function vnoise(x, y) {
+    const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+    const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+  }
+  const fbm = (x, y) => .5 * vnoise(x, y) + .25 * vnoise(x * 2.1, y * 2.1) + .125 * vnoise(x * 4.3, y * 4.3);
+
+  /* ---------- paleta ---------- */
+  const SKIN  = [.62, .40, .29];
+  const SKIN2 = [.74, .34, .30];
+  const LASH  = [.10, .06, .04];
+  const SCL   = [.86, .78, .70];
+  const IRIN  = [.90, .52, .24];
+  const IROUT = [.52, .22, .12];
+  const PINK  = [.62, .36, .95];
+
+  /* ---------- línea de tiempo ---------- */
+  const T_ZOOM = 8, T_FADE = 11.2, LOOP = 12.6;
+  const S0 = .55, S1 = 16;          // zoom inicial / final
+  const CX = 0, CY = .04;           // centro de la pupila (en mundo)
+
+  /* salida del "shader" */
+  let oR = 0, oG = 0, oB = 0, oGlyph = -1, oBoost = 0;
+
+  /* ---------- estrellas dentro de la pupila ---------- */
+  function stars(ux, uy, m, cellU, cellUx, t) {
+    // 3 capas que se acercan al hacer zoom (zoom infinito)
+    let best = 0, glyph = -1;
+    for (let k = 0; k < 3; k++) {
+      const ph = ((m * .5 + k / 3) % 1 + 1) % 1;
+      const s = 9 * Math.exp(Math.log(4) * (1 - ph));
+      const alpha = Math.sin(Math.PI * ph);
+      const px = ux * s + k * 7.13, py = uy * s - k * 3.71;
+      const cx = Math.floor(px), cy = Math.floor(py);
+      const h = hash(cx + k * 31, cy - k * 17);
+      if (h < .13) {
+        const sx = cx + .2 + .6 * hash(cx, cy + 5.3), sy = cy + .2 + .6 * hash(cx + 9.1, cy);
+        const hwx = cellUx * s * .5, hwy = cellU * s * .5;
+        if (Math.abs(px - sx) < hwx && Math.abs(py - sy) < hwy) {
+          const tw = .75 + .25 * Math.sin(t * 3 + h * 90);
+          const v = alpha * tw * (.5 + .9 * h / .13 * .5);
+          if (v > best) {
+            best = v;
+            const g = hash(cx, cy);
+            glyph = v > .55 ? (g < .45 ? 0 : g < .75 ? 1 : 2) : 3;
+          }
+        }
+      }
+    }
+    return [best, glyph];
+  }
+  const STAR_GLYPHS = ["+", "|", "*", "."];
+
+  /* ---------- corazón lila (cristal con brillo y latido) ---------- */
+  let curT = 0;
+  function hf(x, y) { const q = x * x + y * y - 1; return q * q * q - x * x * y * y * y; }
+  function planet(ux, uy, R) {
+    // latido doble
+    const ph = (curT * 1.3) % 1;
+    const pulse = 0;
+    const sc = 1;
+    const x = ux / (R * sc) * 1.15, y = uy / (R * sc) * 1.15 + .12;
+    const f = hf(x, y);
+    if (f < 0) {
+      const H = (a, b) => 1.15 * Math.sqrt(clamp(-hf(a, b), 0, 1.5));
+      const e = .02;
+      const gx = (H(x + e, y) - H(x - e, y)) / (2 * e), gy = (H(x, y + e) - H(x, y - e)) / (2 * e);
+      const inv = 1 / Math.sqrt(gx * gx + gy * gy + 1);
+      const nx = -gx * inv, ny = -gy * inv, nz = inv;
+      // luz principal (arriba izquierda) + rebote magenta (abajo derecha)
+      const dif = clamp(nx * -.5 + ny * .55 + nz * .67);
+      const bounce = clamp(nx * .6 + ny * -.6 + nz * .3);
+      const hx = -.25 + .5 * nx, hy = .3 + .5 * ny, hz = .85 + .5 * nz;
+      const spec = Math.pow(clamp((nx * hx + ny * hy + nz * hz) / Math.hypot(hx, hy, hz)), 45);
+      const rim = Math.pow(1 - nz, 2.2);
+      // veta interna suave tipo cristal
+      const vein = .5 + .5 * Math.sin((x * 1.6 - y * 1.1) * 7 + fbm(x * 2.2, y * 2.2) * 6);
+      // color base: violeta profundo -> lila claro según la luz
+      const deep = [.30, .12, .72], light = [.78, .58, 1.0], mag = [.85, .25, .75];
+      let r = mix(deep[0], light[0], dif), g = mix(deep[1], light[1], dif), b = mix(deep[2], light[2], dif);
+      r = mix(r, mag[0], .45 * bounce); g = mix(g, mag[1], .45 * bounce); b = mix(b, mag[2], .45 * bounce);
+      const v = .88 + .22 * vein;
+      r *= v; g *= v; b *= v;
+      // borde luminoso, brillo especular y brillo del latido
+      const add = .35 * rim + 1.1 * spec + .18 * pulse;
+      r += add * .85; g += add * .7; b += add;
+      // pequeño brillo secundario en el lóbulo derecho
+      const sx = x - .55, sy = y - .62, s2 = Math.exp(-(sx * sx + sy * sy) / .012);
+      r += .5 * s2; g += .45 * s2; b += .55 * s2;
+      return [r * .95, g * .95, b * .95, 1];
+    }
+    const g = Math.exp(-f * 40) * (.3 + .25 * pulse);
+    return [.6 * g, .35 * g, .95 * g, 0];
+  }
+
+  /* ---------- escena: ojo ---------- */
+  function sceneEye(x, y, px, S, ux, uy, cellU, m, t) {
+    const dx = x - CX, dy = y - CY;
+    const rp = .15 + .035 * sstep(1, 8, S);       // la pupila se dilata
+    const ri = .34;
+    const d = Math.hypot(dx, dy);
+    const ax = Math.abs(x);
+    const k = Math.max(0, 1 - x * x);
+    const yu = .50 * Math.pow(k, .8), yl = -.30 * Math.pow(k, .9);
+    const inside = ax < 1 && y < yu && y > yl;
+    let r, g, b;
+
+    if (inside) {
+      if (d < ri) {                                // iris
+        const tt = d / ri, ang = Math.atan2(dy, dx);
+        const streak = fbm(ang * 5 + 3, tt * 3);
+        r = mix(IRIN[0], IROUT[0], tt); g = mix(IRIN[1], IROUT[1], tt); b = mix(IRIN[2], IROUT[2], tt);
+        const f = .75 + .6 * streak;
+        r *= f; g *= f; b *= f;
+        const limb = 1 - .75 * sstep(.82, 1, tt);
+        r *= limb; g *= limb; b *= limb;
+      } else {                                      // esclerótica
+        const sh = (1 - .55 * ax * ax) * (.55 + .45 * sstep(0, .16, yu - y));
+        const vein = .92 + .12 * vnoise(x * 18, y * 18);
+        r = SCL[0] * sh * vein; g = SCL[1] * sh * vein; b = SCL[2] * sh * vein;
+      }
+      // sombra de las pestañas sobre el ojo
+      const lidSh = .6 + .4 * sstep(0, .07, yu - y);
+      r *= lidSh; g *= lidSh; b *= lidSh;
+      // brillo especular
+      const hx = x - (CX - .075), hy = y - (CY + .085);
+      const hl = Math.exp(-(hx * hx + hy * hy) / .0011);
+      r += hl; g += hl; b += hl;
+      // pupila -> espacio
+      if (d < rp + px) {
+        const pw = sstep(rp + px * .8, rp - px * .8, d);
+        const s = stars(ux, uy, m, cellU, cw / Math.min(W, H), t);
+        let sr = .015, sg = .012, sb = .03, sbright = s[0];
+        sr += sbright * .95; sg += sbright * .95; sb += sbright;
+        let pr = 0, pg = 0, pb = 0;
+        const R = .3 * sstep(4, 9.5, S);
+        if (R > .002) { const p = planet(ux, uy, R); pr = p[0]; pg = p[1]; pb = p[2];
+          if (p[3] > 0) { sr = pr; sg = pg; sb = pb; s[1] = -1; } else { sr += pr; sg += pg; sb += pb; } }
+        r = mix(r, sr, pw); g = mix(g, sg, pw); b = mix(b, sb, pw);
+        if (pw > .5 && s[1] >= 0 && sbright > .12) oGlyph = s[1];
+      }
+    } else {                                        // piel
+      const n = fbm(x * 9, y * 9), n2 = vnoise(x * 38, y * 38);
+      const up = y >= yu;
+      let sh = .82 + .3 * n;
+      if (up) {
+        const above = y - yu;
+        sh *= .55 + .45 * sstep(0, .035, above);             // sombra pegada al párpado
+        sh *= 1 - .35 * Math.exp(-Math.pow((above - .16) / .035, 2)); // pliegue
+        sh *= 1 - .25 * sstep(.4, .9, above);                // hacia la ceja
+      } else {
+        const below = yl - y;
+        sh *= .6 + .4 * sstep(0, .05, below);
+        sh *= 1 + .1 * Math.exp(-Math.pow((below - .12) / .05, 2));
+      }
+      const m2 = .35 * sstep(.1, .5, ax - .55 + .2 * n2);
+      r = mix(SKIN[0], SKIN2[0], m2 + .15 * n) * sh;
+      g = mix(SKIN[1], SKIN2[1], m2 + .15 * n) * sh;
+      b = mix(SKIN[2], SKIN2[2], m2 + .15 * n) * sh;
+      // pestañas
+      if (up && ax < .96) {
+        const above = y - yu;
+        const lenL = .05 + .07 * hash(Math.floor(x * 46), 3);
+        const ph = vnoise(x * 46, 1.7);
+        if (above < lenL && ph > .38) { r = LASH[0]; g = LASH[1]; b = LASH[2]; }
+      }
+      if (!up && ax < .9) {                          // línea de agua rosada
+        const below = yl - y;
+        if (below < .022) { r = SKIN2[0]; g = SKIN2[1] * .8; b = SKIN2[2] * .9; }
+      }
+    }
+    oR = r; oG = g; oB = b;
+  }
+
+  /* ---------- render ---------- */
+  let W = 0, H = 0, dpr = 1, cw = 8, chh = 14, cols = 0, rows = 0, fs = 13;
+
+  function resize() {
+    const r = cv.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = Math.max(1, Math.round(r.width)); H = Math.max(1, Math.round(r.height));
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const targetCols = clamp(Math.round(W / 7.2), 52, 150);
+    cw = W / targetCols; fs = cw / .6; chh = fs * 1.0;
+    cols = targetCols; rows = Math.ceil(H / chh);
+    ctx.font = `${fs}px ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace`;
+    ctx.textBaseline = "middle"; ctx.textAlign = "center";
+  }
+
+  function render(t) {
+    curT = t;
+    // línea de tiempo
+    const s = clamp(t / T_ZOOM);
+    const e = s * s * (3 - 2 * s);
+    const S = S0 * Math.exp(Math.log(S1 / S0) * e);
+    const m = Math.log2(S * .17) + .08 * t;
+    const fade = sstep(0, .7, t) * (1 - sstep(T_FADE, LOOP - .2, t));
+
+    ctx.fillStyle = "#050508";
+    ctx.fillRect(0, 0, W, H);
+
+    const unit = Math.min(W, H);
+    const cellU = chh / unit;                 // alto de celda en unidades de pantalla
+    const px = cellU / S * .7;                // tamaño de celda en el mundo (para bordes)
+    const tq = Math.floor(t * 9);             // parpadeo de caracteres
+
+    for (let j = 0; j < rows; j++) {
+      const uy = (H / 2 - (j + .5) * chh) / unit;
+      for (let i = 0; i < cols; i++) {
+        const ux = ((i + .5) * cw - W / 2) / unit;
+        oGlyph = -1;
+        sceneEye(CX + ux / S, CY + uy / S, px, S, ux, uy, cellU, m, t);
+
+        let lum = .299 * oR + .587 * oG + .114 * oB;
+        // viñeta suave
+        const vr = Math.hypot(ux, uy);
+        const vig = 1 - .55 * sstep(.45, 1.1, vr);
+        lum *= vig;
+        if (lum < .02 && oGlyph < 0) continue;
+
+        let ch;
+        if (oGlyph >= 0) ch = STAR_GLYPHS[oGlyph];
+        else {
+          const jit = hash(i * 1.7 + tq * .31, j * 2.3 + tq) - .5;
+          let idx = Math.floor(Math.pow(clamp(lum * 1.25), .85) * NR + jit * 5);
+          idx = idx < 1 ? 1 : idx > NR ? NR : idx;
+          ch = RAMP[idx];
+        }
+        const f = (.55 + 1.15 * (lum / Math.max(vig, .01))) * vig * fade;
+        const r = clamp(oR * f) * 255 | 0, g = clamp(oG * f) * 255 | 0, b = clamp(oB * f) * 255 | 0;
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillText(ch, (i + .5) * cw, (j + .5) * chh);
+      }
+    }
+  }
+
+  /* ---------- bucle ---------- */
+  let t0 = performance.now(), paused = false, tPaused = 0, last = 0;
+  const now = () => paused ? tPaused : ((performance.now() - t0) / 1000) % LOOP;
+
+  function frame(ts) {
+    requestAnimationFrame(frame);
+    if (ts - last < 33) return;      // ~30 fps
+    last = ts;
+    render(now());
+  }
+
+  function togglePause() {
+    if (paused) { t0 = performance.now() - tPaused * 1000; paused = false; }
+    else { tPaused = now(); paused = true; }
+  }
+  function restart() { t0 = performance.now(); paused = false; tPaused = 0; }
+
+  let tapTimer = null;
+  cv.addEventListener("click", () => {
+    if (tapTimer) { clearTimeout(tapTimer); tapTimer = null; restart(); return; }
+    tapTimer = setTimeout(() => { tapTimer = null; togglePause(); }, 260);
+  });
+  window.addEventListener("keydown", e => {
+    if (e.code === "Space") { e.preventDefault(); togglePause(); }
+    if (e.key === "r" || e.key === "R") restart();
+  });
+  window.addEventListener("resize", resize);
+
+  resize();
+  window.__render = t => { paused = true; tPaused = t; render(t); };   // para pruebas
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
